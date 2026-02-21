@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PixelFix — Восстановление пикселей</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Segoe UI', sans-serif;
+      user-select: none;
+    }
+
+    canvas {
+      display: block;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #ui {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 18px;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      z-index: 999;
+      color: #fff;
+    }
+
+    #timer {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #7affb2;
+      min-width: 80px;
+      text-align: center;
+    }
+
+    #status {
+      font-size: 13px;
+      color: rgba(255,255,255,0.65);
+      line-height: 1.5;
+      max-width: 220px;
+    }
+
+    #status b { color: #fff; }
+
+    #progress-wrap {
+      width: 160px;
+    }
+
+    #progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #7affb2, #00cfff);
+      border-radius: 99px;
+      transition: width 1s linear;
+    }
+
+    #progress-label {
+      margin-top: 6px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.45);
+      text-align: right;
+    }
+
+    #btn-pause {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      border-radius: 10px;
+      padding: 8px 18px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+    #btn-pause:hover { background: rgba(255,255,255,0.2); }
+
+    #hint {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.3);
+      font-size: 12px;
+      z-index: 999;
+      pointer-events: none;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="hint">Нажми F11 для полного экрана • Рекомендуется оставить на 10–30 минут</div>
+
+<div id="ui">
+  <div id="timer">00:00</div>
+
+  <div id="progress-wrap">
+    <div id="progress-bar-bg">
+      <div id="progress-bar"></div>
+    </div>
+    <div id="progress-label">Цель: 10 мин</div>
+  </div>
+
+  <div id="status">
+    <b>PixelFix активен</b><br>
+    Весь экран покрыт мигающими пикселями
+  </div>
+
+  <button id="btn-pause">⏸ Пауза</button>
+</div>
+
+<script>
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const timerEl = document.getElementById('timer');
+  const barEl = document.getElementById('progress-bar');
+  const btnPause = document.getElementById('btn-pause');
+  const statusEl = document.getElementById('status');
+
+  const TARGET_SECONDS = 600; // 10 минут
+  let startTime = Date.now();
+  let paused = false;
+  let pausedAt = 0;
+  let totalPaused = 0;
+  let animId;
+
+  // Настройки точек
+  const DOT_SIZE = 3;      // размер пикселя/точки
+  const DENSITY = 0.55;    // доля экрана, покрытая точками (0–1)
+
+  let dots = [];
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    buildDots();
+  }
+
+  function randColor() {
+    // Полностью насыщенные цвета — RGB для максимальной эффективности
+    const colors = [
+      [255, 0, 0],
+      [0, 255, 0],
+      [0, 0, 255],
+      [255, 255, 0],
+      [0, 255, 255],
+      [255, 0, 255],
+      [255, 255, 255],
+      [255, 128, 0],
+      [128, 0, 255],
+      [0, 255, 128],
+    ];
+    const c = colors[Math.floor(Math.random() * colors.length)];
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+
+  function buildDots() {
+    dots = [];
+    const cols = Math.ceil(canvas.width / DOT_SIZE);
+    const rows = Math.ceil(canvas.height / DOT_SIZE);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (Math.random() < DENSITY) {
+          dots.push({
+            x: x * DOT_SIZE,
+            y: y * DOT_SIZE,
+            // скорость смены цвета — каждая точка независима
+            interval: Math.floor(Math.random() * 6) + 1,
+            frame: Math.floor(Math.random() * 60),
+            color: randColor(),
+          });
+        }
+      }
+    }
+  }
+
+  let frame = 0;
+
+  function draw() {
+    if (paused) return;
+
+    frame++;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (let d of dots) {
+      // Каждая точка меняет цвет со своей частотой
+      if (frame % d.interval === d.frame % d.interval) {
+        d.color = randColor();
+      }
+      ctx.fillStyle = d.color;
+      ctx.fillRect(d.x, d.y, DOT_SIZE, DOT_SIZE);
+    }
+
+    updateTimer();
+    animId = requestAnimationFrame(draw);
+  }
+
+  function formatTime(sec) {
+    const m = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  function updateTimer() {
+    const elapsed = Math.floor((Date.now() - startTime - totalPaused) / 1000);
+    timerEl.textContent = formatTime(elapsed);
+    const pct = Math.min((elapsed / TARGET_SECONDS) * 100, 100);
+    barEl.style.width = pct + '%';
+
+    if (elapsed >= TARGET_SECONDS && elapsed < TARGET_SECONDS + 5) {
+      statusEl.innerHTML = '<b style="color:#7affb2">✓ 10 минут выполнено!</b><br>Можно оставить ещё дольше';
+    }
+  }
+
+  btnPause.addEventListener('click', () => {
+    paused = !paused;
+    if (paused) {
+      pausedAt = Date.now();
+      btnPause.textContent = '▶ Продолжить';
+      cancelAnimationFrame(animId);
+    } else {
+      totalPaused += Date.now() - pausedAt;
+      btnPause.textContent = '⏸ Пауза';
+      draw();
+    }
+  });
+
+  // Двойной клик — скрыть/показать UI
+  document.addEventListener('dblclick', () => {
+    const ui = document.getElementById('ui');
+    const hint = document.getElementById('hint');
+    ui.style.display = ui.style.display === 'none' ? 'flex' : 'none';
+    hint.style.display = hint.style.display === 'none' ? 'block' : 'none';
+  });
+
+  window.addEventListener('resize', resize);
+  resize();
+  draw();
+</script>
+</body>
+</html>
